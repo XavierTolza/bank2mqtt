@@ -1,13 +1,22 @@
-
 import json
 import paho.mqtt.client as mqtt
+from typing import Optional
 from .handler import Handler
+
 
 class MqttHandler(Handler):
     """
     A handler to publish transaction data to an MQTT topic.
     """
-    def __init__(self, host: str, topic: str, port: int = 1883, username: str = None, password: str = None):
+
+    def __init__(
+        self,
+        host: str,
+        topic: str,
+        port: int = 1883,
+        username: Optional[str] = None,
+        password: Optional[str] = None,
+    ):
         """
         Initializes the MQTT handler.
 
@@ -24,7 +33,7 @@ class MqttHandler(Handler):
             "host": host,
             "port": port,
             "username": username,
-            "password": password
+            "password": password,
         }
         self.topic = topic
 
@@ -34,8 +43,10 @@ class MqttHandler(Handler):
         """
         client = mqtt.Client()
         if self.broker_config["username"]:
-            client.username_pw_set(self.broker_config["username"], self.broker_config["password"])
-        
+            client.username_pw_set(
+                self.broker_config["username"], self.broker_config["password"]
+            )
+
         try:
             client.connect(self.broker_config["host"], self.broker_config["port"], 60)
             client.loop_start()
@@ -47,4 +58,3 @@ class MqttHandler(Handler):
             print(f"Successfully published transaction to MQTT topic: {self.topic}")
         except Exception as e:
             print(f"Error publishing to MQTT: {e}")
-

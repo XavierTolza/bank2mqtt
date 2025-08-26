@@ -1,8 +1,13 @@
 import sys
-from time import time
+import time
 import click
+import yaml
 from bank2mqtt.client import PowensClient as Client
 from bank2mqtt.logging import get_logger, setup_logging
+from bank2mqtt.handlers.mqtt import MqttHandler
+from bank2mqtt.handlers.email import EmailHandler
+from bank2mqtt.handlers.webhook import WebhookHandler
+from bank2mqtt.handlers.ntfy import NtfyHandler
 from dotenv import load_dotenv
 import json
 
@@ -164,6 +169,83 @@ def list_transactions(account_id, limit, date_from, date_to):
         raise click.Abort()
 
 
+def load_config(config_path: str) -> dict:
+    """Load configuration from YAML file."""
+    try:
+        with open(config_path, "r", encoding="utf-8") as file:
+            return yaml.safe_load(file)
+    except FileNotFoundError:
+        logger.error(f"Configuration file not found: {config_path}")
+        raise
+    except yaml.YAMLError as e:
+        logger.error(f"Error parsing YAML configuration: {e}")
+        raise
+
+
+def setup_handlers(config: dict) -> list:
+    """Setup and return list of configured handlers."""
+    handlers = []
+    handlers_config = config.get("handlers", {})
+
+    # MQTT Handler
+    if handlers_config.get("mqtt", {}).get("enabled", False):
+        mqtt_config = handlers_config["mqtt"]
+        try:
+            handler = MqttHandler(
+                host=mqtt_config["host"],
+                topic=mqtt_config["topic"],
+                port=mqtt_config.get("port", 1883),
+                username=mqtt_config.get("username"),
+                password=mqtt_config.get("password"),
+            )
+            handlers.append(handler)
+            logger.info("MQTT handler initialized")
+        except Exception as e:
+            logger.error(f"Failed to initialize MQTT handler: {e}")
+
+    # Email Handler
+    if handlers_config.get("email", {}).get("enabled", False):
+        email_config = handlers_config["email"]
+        try:
+            handler = EmailHandler(
+                smtp_host=email_config["smtp_host"],
+                smtp_port=email_config["smtp_port"],
+                smtp_user=email_config["smtp_user"],
+                smtp_pass=email_config["smtp_pass"],
+                to_email=email_config["to_email"],
+                from_email=email_config.get("from_email"),
+            )
+            handlers.append(handler)
+            logger.info("Email handler initialized")
+        except Exception as e:
+            logger.error(f"Failed to initialize Email handler: {e}")
+
+    # Webhook Handler
+    if handlers_config.get("webhook", {}).get("enabled", False):
+        webhook_config = handlers_config["webhook"]
+        try:
+            handler = WebhookHandler(url=webhook_config["url"])
+            handlers.append(handler)
+            logger.info("Webhook handler initialized")
+        except Exception as e:
+            logger.error(f"Failed to initialize Webhook handler: {e}")
+
+    # NTFY Handler
+    if handlers_config.get("ntfy", {}).get("enabled", False):
+        ntfy_config = handlers_config["ntfy"]
+        try:
+            handler = NtfyHandler(
+                topic=ntfy_config["topic"],
+                server=ntfy_config.get("server", "https://ntfy.sh"),
+            )
+            handlers.append(handler)
+            logger.info("NTFY handler initialized")
+        except Exception as e:
+            logger.error(f"Failed to initialize NTFY handler: {e}")
+
+    return handlers
+
+
 @click.command()
 @click.option(
     "--config",
@@ -182,7 +264,8 @@ def stream(config_path: str, loop: bool):
     client_config = config.get("bank_client", {})
     if not all(k in client_config for k in ["domain", "client_id", "client_secret"]):
         print(
-            "Erreur: La configuration 'bank_client' est incomplète dans le fichier YAML."
+            "Erreur: La configuration 'bank_client' est incomplète dans le "
+            "fichier YAML."
         )
         sys.exit(1)
 
@@ -234,12 +317,14 @@ def stream(config_path: str, loop: bool):
     try:
         if loop:
             print(
-                f"Mode boucle activé. Le cycle se répétera toutes les {interval} secondes."
+                f"Mode boucle activé. Le cycle se répétera toutes les "
+                f"{interval} secondes."
             )
             while True:
                 run_once()
                 print(
-                    f"Attente de {interval} secondes avant le prochain cycle... (Ctrl+C pour arrêter)"
+                    f"Attente de {interval} secondes avant le prochain "
+                    f"cycle... (Ctrl+C pour arrêter)"
                 )
                 time.sleep(interval)
         else:
@@ -252,6 +337,8 @@ def stream(config_path: str, loop: bool):
 
 if __name__ == "__main__":
     logger.debug("Application starting from main entry point")
+    # Add the stream command to the CLI group
+    cli.add_command(stream)
     try:
         cli()
     except Exception as e:

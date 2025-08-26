@@ -1,5 +1,4 @@
 import requests
-import json
 from .handler import Handler
 
 
@@ -28,7 +27,10 @@ class NtfyHandler(Handler):
         account = data.get("account", {})
 
         title = f"New transaction on {account.get('name', 'account')}"
-        message = f"Amount: {transaction.get('amount')} {account.get('currency')}\nDescription: {transaction.get('description')}"
+        message = (
+            f"Amount: {transaction.get('amount')} {account.get('currency')}\n"
+            f"Description: {transaction.get('description')}"
+        )
 
         try:
             response = requests.post(
