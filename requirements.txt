@@ -3,5 +3,4 @@ dotenv
 click
 loguru
 platformdirs
-PyYAML
 paho-mqtt

@@ -153,6 +153,10 @@ def run():
 
     sleep_interval = int(os.getenv("SLEEP_INTERVAL", 60 * 60 * 2))
 
+    # Display url to manage accounts
+    url = client.get_webview_url()
+    logger.info(f"You can manage your accounts at: {url}")
+
     # Retrieve bank accounts
     accounts = client.list_accounts(all_accounts=True)
     logger.info(f"Retrieved {len(accounts)} accounts")
@@ -167,10 +171,6 @@ def run():
     if start_date:
         params["last_update"] = start_date
     logger.info(f"Starting transaction fetch from date: {start_date}")
-
-    # Display url to manage accounts
-    url = client.get_webview_url()
-    click.echo(f"Manage accounts at: {url}")
 
     with MqttHandler.from_env() as mqtt_handler:
         while True:
