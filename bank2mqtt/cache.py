@@ -4,9 +4,7 @@ from pathlib import Path
 from typing import Any, Optional, Dict, Iterator
 from platformdirs import user_cache_dir
 
-from bank2mqtt.logging import get_logger
-
-logger = get_logger(__name__)
+from loguru import logger
 
 
 class Cache:

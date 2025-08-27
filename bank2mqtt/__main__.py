@@ -1,22 +1,16 @@
-import sys
+import os
+from typing import Dict
 import time
+from typing import Any
 import click
-import yaml
 from bank2mqtt.client import PowensClient as Client
-from bank2mqtt.logging import get_logger, setup_logging
 from bank2mqtt.handlers.mqtt import MqttHandler
-from bank2mqtt.handlers.email import EmailHandler
-from bank2mqtt.handlers.webhook import WebhookHandler
-from bank2mqtt.handlers.ntfy import NtfyHandler
 from dotenv import load_dotenv
 import json
+from loguru import logger
 
 # Load environment variables
 load_dotenv()
-
-# Setup logging as early as possible
-setup_logging()
-logger = get_logger(__name__)
 
 
 @click.group()
@@ -113,26 +107,6 @@ def list_accounts(all_accounts):
 
 
 @cli.command()
-@click.argument("account_id", type=int)
-def activate_account(account_id):
-    """Activate a disabled account by ID."""
-    logger.info(f"Activating account {account_id}")
-    try:
-        client = Client.from_env()
-        logger.debug("Client created from environment variables")
-        client.authenticate()
-        logger.debug("Authentication completed")
-        result = client.activate_account(account_id)
-        logger.success(f"Account {account_id} activated successfully")
-        logger.debug(f"Activation result: {result}")
-        click.echo(json.dumps(result, indent=2))
-    except Exception as e:
-        logger.error(f"Failed to activate account {account_id}: {e}")
-        click.echo(f"Error: {e}", err=True)
-        raise click.Abort()
-
-
-@cli.command()
 @click.option("--account-id", type=int, help="Account ID to filter transactions")
 @click.option("--limit", type=int, default=50, help="Number of transactions to fetch")
 @click.option("--date-from", type=str, help="Start date (YYYY-MM-DD)")
@@ -169,176 +143,79 @@ def list_transactions(account_id, limit, date_from, date_to):
         raise click.Abort()
 
 
-def load_config(config_path: str) -> dict:
-    """Load configuration from YAML file."""
-    try:
-        with open(config_path, "r", encoding="utf-8") as file:
-            return yaml.safe_load(file)
-    except FileNotFoundError:
-        logger.error(f"Configuration file not found: {config_path}")
-        raise
-    except yaml.YAMLError as e:
-        logger.error(f"Error parsing YAML configuration: {e}")
-        raise
+@cli.command()
+def run():
+    # Get the client
+    client = Client.from_env()
+    logger.debug("Client created from environment variables")
+    client.authenticate()
+    logger.debug("Authentication completed")
 
+    sleep_interval = int(os.getenv("SLEEP_INTERVAL", 60 * 60 * 2))
 
-def setup_handlers(config: dict) -> list:
-    """Setup and return list of configured handlers."""
-    handlers = []
-    handlers_config = config.get("handlers", {})
+    # Retrieve bank accounts
+    accounts = client.list_accounts(all_accounts=True)
+    logger.info(f"Retrieved {len(accounts)} accounts")
+    if len(accounts) == 0:
+        logger.warning("No accounts found.")
+        click.echo("No accounts found.")
+        return
+    accounts_by_id = {account["id"]: account for account in accounts}
 
-    # MQTT Handler
-    if handlers_config.get("mqtt", {}).get("enabled", False):
-        mqtt_config = handlers_config["mqtt"]
-        try:
-            handler = MqttHandler(
-                host=mqtt_config["host"],
-                topic=mqtt_config["topic"],
-                port=mqtt_config.get("port", 1883),
-                username=mqtt_config.get("username"),
-                password=mqtt_config.get("password"),
-            )
-            handlers.append(handler)
-            logger.info("MQTT handler initialized")
-        except Exception as e:
-            logger.error(f"Failed to initialize MQTT handler: {e}")
+    start_date = client.cache.get("last_date")
+    params: Dict[str, Any] = {"limit": 1000}
+    if start_date:
+        params["last_update"] = start_date
+    logger.info(f"Starting transaction fetch from date: {start_date}")
 
-    # Email Handler
-    if handlers_config.get("email", {}).get("enabled", False):
-        email_config = handlers_config["email"]
-        try:
-            handler = EmailHandler(
-                smtp_host=email_config["smtp_host"],
-                smtp_port=email_config["smtp_port"],
-                smtp_user=email_config["smtp_user"],
-                smtp_pass=email_config["smtp_pass"],
-                to_email=email_config["to_email"],
-                from_email=email_config.get("from_email"),
-            )
-            handlers.append(handler)
-            logger.info("Email handler initialized")
-        except Exception as e:
-            logger.error(f"Failed to initialize Email handler: {e}")
+    # Display url to manage accounts
+    url = client.get_webview_url()
+    click.echo(f"Manage accounts at: {url}")
 
-    # Webhook Handler
-    if handlers_config.get("webhook", {}).get("enabled", False):
-        webhook_config = handlers_config["webhook"]
-        try:
-            handler = WebhookHandler(url=webhook_config["url"])
-            handlers.append(handler)
-            logger.info("Webhook handler initialized")
-        except Exception as e:
-            logger.error(f"Failed to initialize Webhook handler: {e}")
-
-    # NTFY Handler
-    if handlers_config.get("ntfy", {}).get("enabled", False):
-        ntfy_config = handlers_config["ntfy"]
-        try:
-            handler = NtfyHandler(
-                topic=ntfy_config["topic"],
-                server=ntfy_config.get("server", "https://ntfy.sh"),
-            )
-            handlers.append(handler)
-            logger.info("NTFY handler initialized")
-        except Exception as e:
-            logger.error(f"Failed to initialize NTFY handler: {e}")
-
-    return handlers
-
-
-@click.command()
-@click.option(
-    "--config",
-    "config_path",
-    required=True,
-    type=click.Path(exists=True),
-    help="Chemin vers le fichier de configuration YAML.",
-)
-@click.option(
-    "--loop", is_flag=True, help="Activer le mode boucle pour streamer en continu."
-)
-def stream(config_path: str, loop: bool):
-    """Récupère les transactions bancaires et les envoie aux handlers configurés."""
-    config = load_config(config_path)
-
-    client_config = config.get("bank_client", {})
-    if not all(k in client_config for k in ["domain", "client_id", "client_secret"]):
-        print(
-            "Erreur: La configuration 'bank_client' est incomplète dans le "
-            "fichier YAML."
-        )
-        sys.exit(1)
-
-    # Initialiser le client bancaire (à adapter selon votre implémentation)
-    # bank_client = BankClient(
-    #     domain=client_config['domain'],
-    #     client_id=client_config['client_id'],
-    #     client_secret=client_config['client_secret']
-    # )
-
-    handlers = setup_handlers(config)
-    if not handlers:
-        print("Aucun handler actif. Le programme va s'arrêter.")
-        sys.exit(0)
-
-    interval = config.get("loop_interval", 86400)  # 24h par défaut
-
-    def run_once():
-        print("Récupération des nouvelles transactions...")
-        # --- LOGIQUE DE RÉCUPÉRATION ---
-        # new_transactions, account_info = bank_client.get_new_transactions()
-        # C'est ici que vous mettriez votre logique pour appeler le client.
-        # Pour la démo, nous utilisons des données factices :
-        new_transactions = [
-            {
-                "date": "2025-08-26",
-                "description": "Exemple de transaction",
-                "amount": -99.99,
-            }
-        ]
-        account_info = {"name": "Compte courant", "currency": "EUR"}
-        # --------------------------------
-
-        if not new_transactions:
-            print("Aucune nouvelle transaction trouvée.")
-            return
-
-        print(f"{len(new_transactions)} nouvelle(s) transaction(s) trouvée(s).")
-        for transaction in new_transactions:
-            for handler in handlers:
-                try:
-                    handler.process_transaction(
-                        {"transaction": transaction, "account": account_info}
+    with MqttHandler.from_env() as mqtt_handler:
+        while True:
+            # Get new transactions
+            new_transactions = client.list_transactions(**params)
+            if len(new_transactions):
+                for tx in new_transactions:
+                    account = accounts_by_id.get(tx["id_account"])
+                    mqtt_handler.process_transaction({**tx, "account": account})
+                else:
+                    start_date = tx["last_update"]
+                    client.cache.set("last_date", start_date)
+                    params["last_update"] = start_date
+                    logger.debug(
+                        f"Updated last transaction date to: {client.cache.get('last_date')}"
                     )
-                except Exception as e:
-                    print(f"Erreur lors du traitement par un handler : {e}")
-
-    # Exécution principale
-    try:
-        if loop:
-            print(
-                f"Mode boucle activé. Le cycle se répétera toutes les "
-                f"{interval} secondes."
-            )
-            while True:
-                run_once()
-                print(
-                    f"Attente de {interval} secondes avant le prochain "
-                    f"cycle... (Ctrl+C pour arrêter)"
+            else:
+                logger.debug(
+                    (
+                        f"Sleeping for {sleep_interval} seconds before next fetch. "
+                        f"You can manage your accounts at: {url}"
+                    )
                 )
-                time.sleep(interval)
-        else:
-            print("Exécution unique.")
-            run_once()
-    except KeyboardInterrupt:
-        print("\nProgramme interrompu par l'utilisateur. Arrêt en cours...")
-        sys.exit(0)
+                time.sleep(sleep_interval)
+    client.cache.close()
+
+
+@cli.command()
+def reset_last_date():
+    """Reset the cached last transaction date."""
+    try:
+        client = Client.from_env()
+        client.cache.delete("last_date")
+        logger.success("Last transaction date reset successfully")
+        click.echo("Last transaction date has been reset.")
+    except Exception as e:
+        logger.error(f"Failed to reset last transaction date: {e}")
+        click.echo(f"Error: {e}", err=True)
+        raise click.Abort()
 
 
 if __name__ == "__main__":
     logger.debug("Application starting from main entry point")
     # Add the stream command to the CLI group
-    cli.add_command(stream)
+    cli.add_command(run)
     try:
         cli()
     except Exception as e:

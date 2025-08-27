@@ -5,20 +5,14 @@ from typing import Optional, Dict, Any, List, Generator
 from datetime import datetime, timedelta
 
 from bank2mqtt.cache import Cache
-from bank2mqtt.logging import get_logger
+from loguru import logger
 import hashlib
-
-logger = get_logger(__name__)
 
 
 class PowensClient:
     """
     Client for interacting with Powens Banking API.
     """
-
-    # Cache keys constants
-    CACHE_KEY_LAST_TRANSACTION_ID = "last_transaction_id"
-    CACHE_KEY_LAST_TRANSACTION_DATE = "last_transaction_date"
 
     def __init__(
         self,
@@ -209,11 +203,11 @@ class PowensClient:
     def list_transactions(
         self,
         account_id: Optional[int] = None,
-        limit: int = 50,
+        limit: Optional[int] = None,
         date_from: Optional[str] = None,
         date_to: Optional[str] = None,
         **kwargs,
-    ) -> Dict[str, Any]:
+    ) -> List[Dict[str, Any]]:
         """
         List transactions. If account_id is None, return across all connections.
         """
@@ -244,16 +238,22 @@ class PowensClient:
         logger.debug(f"Transactions URL: {url}")
         logger.debug(f"Request parameters: {params}")
 
+        transactions = []
         try:
-            resp = requests.get(url, headers=headers)
-            resp.raise_for_status()
-            logger.debug(f"Transactions response status: {resp.status_code}")
+            while url:
+                resp = requests.get(url, headers=headers)
+                resp.raise_for_status()
+                logger.debug(f"Transactions response status: {resp.status_code}")
 
-            result = resp.json()
-            transaction_count = len(result.get("transactions", []))
+                result = resp.json()
+                transactions.extend(result.get("transactions", []))
+                url = (result["_links"].get("next", {}) or {}).get("href")
+
+            transaction_count = len(transactions)
             logger.success(f"Retrieved {transaction_count} transactions")
 
-            return result
+            transactions = sorted(transactions, key=lambda x: x["date"])
+            return transactions
 
         except requests.HTTPError as e:
             error_msg = f"Error fetching transactions: {e}"
@@ -303,236 +303,3 @@ class PowensClient:
 
         logger.success("Successfully created PowensClient from environment")
         return cls(domain, client_id, client_secret, callback_url)  # type: ignore
-
-    def stream_new_transactions(
-        self,
-        limit: int = 1000,
-        **kwargs,
-    ) -> Generator[Dict[str, Any], None, None]:
-        """
-        Stream new transactions since the last update in chronological order.
-
-        This method yields transactions that have been updated since the last
-        time it was called. Transactions are yielded in chronological order
-        (oldest first) and uses the cache to track the last processed
-        transaction ID and date for optimization.
-
-        Args:
-            limit: Number of transactions to fetch per request (max 1000)
-            **kwargs: Additional parameters for the API call
-
-        Yields:
-            Dict: Individual transaction objects in chronological order
-        """
-        logger.info(f"Starting transaction streaming (limit={limit})")
-        self._ensure_authenticated()
-
-        # Get the last processed transaction info from cache
-        last_transaction_id = self.cache.get(self.CACHE_KEY_LAST_TRANSACTION_ID)
-        last_transaction_date = self.cache.get(self.CACHE_KEY_LAST_TRANSACTION_DATE)
-
-        logger.info(f"Last processed transaction ID: {last_transaction_id}")
-        logger.info(f"Last processed transaction date: {last_transaction_date}")
-
-        # Set up initial parameters
-        params: Dict[str, Any] = {"limit": limit, **kwargs}
-
-        # If we have a last transaction date, start from the day before to ensure
-        # we don't miss any transactions due to timing issues
-        if last_transaction_date and not last_transaction_id:
-            logger.debug("Using date-based filtering for transaction streaming")
-            # Parse the date and subtract one day for safety
-            try:
-                date_obj = datetime.fromisoformat(
-                    last_transaction_date.replace("Z", "+00:00")
-                )
-                start_date = (date_obj - timedelta(days=1)).strftime("%Y-%m-%d")
-                params["min_date"] = start_date
-                logger.debug(f"Set min_date filter to: {start_date}")
-            except (ValueError, AttributeError) as e:
-                # If date parsing fails, proceed without date filter
-                logger.warning(f"Failed to parse last transaction date: {e}")
-
-        # Collect all new transactions first
-        new_transactions = []
-        processed_ids = set()
-        request_count = 0
-
-        logger.info("Starting to fetch new transactions...")
-
-        # Fetch transactions using pagination - always use all accounts
-        url_path = "transactions"
-
-        while True:
-            request_count += 1
-            logger.debug(f"Making API request #{request_count}")
-
-            from urllib.parse import urlencode
-
-            url = f"{self.base_url}/users/me/{url_path}?{urlencode(params)}"
-            headers = {"Authorization": f"Bearer {self.auth_token}"}
-
-            logger.debug(f"Request URL: {url}")
-            logger.debug(f"Request parameters: {params}")
-
-            resp = None
-            try:
-                resp = requests.get(url, headers=headers)
-                resp.raise_for_status()
-                logger.debug(f"API response status: {resp.status_code}")
-                data = resp.json()
-            except requests.HTTPError as e:
-                error_msg = f"Error fetching transactions: {e}"
-                if resp is not None:
-                    error_msg += f" - Response: {resp.text}"
-                logger.error(error_msg)
-                raise requests.HTTPError(error_msg) from e
-
-            transactions = data.get("transactions", [])
-            logger.debug(f"Received {len(transactions)} transactions in batch")
-
-            if not transactions:
-                logger.debug("No more transactions available, stopping pagination")
-                break
-
-            # Process transactions in this batch
-            batch_new_count = 0
-            for transaction in transactions:
-                transaction_id = transaction.get("id")
-
-                # Skip if we've already processed this transaction
-                if transaction_id in processed_ids:
-                    logger.trace(f"Skipping duplicate transaction {transaction_id}")
-                    continue
-
-                # Skip if this transaction was already processed in a previous run
-                if last_transaction_id and transaction_id <= last_transaction_id:
-                    logger.trace(
-                        f"Skipping already processed transaction {transaction_id}"
-                    )
-                    continue
-
-                processed_ids.add(transaction_id)
-                new_transactions.append(transaction)
-                batch_new_count += 1
-
-                logger.trace(
-                    f"Added new transaction {transaction_id} "
-                    f"({transaction.get('date', 'no date')})"
-                )
-
-            logger.debug(f"Found {batch_new_count} new transactions in this batch")
-
-            # Check if there's a next page
-            next_link = data.get("_links", {}).get("next")
-            if not next_link:
-                logger.debug("No next page available, pagination complete")
-                break
-
-            # Extract cursor from next link for pagination
-            next_href = next_link.get("href", "")
-            if "cursor=" in next_href:
-                cursor = next_href.split("cursor=")[1].split("&")[0]
-                params["cursor"] = cursor
-                logger.debug(f"Continuing with cursor: {cursor}")
-            else:
-                logger.debug("No valid cursor found in next link, stopping")
-                break
-
-        logger.info(
-            f"Fetching complete. Found {len(new_transactions)} new transactions"
-        )
-
-        # Sort transactions by date (chronological order - oldest first)
-        # Use multiple sort keys to ensure consistent ordering
-        def sort_key(tx):
-            date = tx.get("date", "")
-            tx_id = tx.get("id", 0)
-            # Return tuple for sorting: (date, id)
-            return (date, tx_id)
-
-        new_transactions.sort(key=sort_key)
-        logger.debug("Transactions sorted chronologically")
-
-        # Yield transactions in chronological order and update cache progressively
-        current_max_id = last_transaction_id
-        current_max_date = last_transaction_date
-        yielded_count = 0
-
-        logger.info(f"Starting to yield {len(new_transactions)} transactions")
-
-        for transaction in new_transactions:
-            transaction_id = transaction.get("id")
-            transaction_date = transaction.get("date")
-
-            # Update the maximum transaction ID and date we've seen
-            if transaction_id and (
-                not current_max_id or transaction_id > current_max_id
-            ):
-                current_max_id = transaction_id
-
-            if transaction_date and (
-                not current_max_date or transaction_date > current_max_date
-            ):
-                current_max_date = transaction_date
-
-            # Update cache immediately for each transaction yielded
-            self.cache[self.CACHE_KEY_LAST_TRANSACTION_ID] = current_max_id
-            if current_max_date:
-                self.cache[self.CACHE_KEY_LAST_TRANSACTION_DATE] = current_max_date
-
-            yielded_count += 1
-            logger.debug(
-                f"Yielding transaction {yielded_count}/{len(new_transactions)}: "
-                f"ID {transaction_id} ({transaction_date})"
-            )
-
-            yield transaction
-
-        logger.success(
-            f"Transaction streaming completed. Yielded {yielded_count} transactions"
-        )
-        logger.info(
-            f"Final state - Last ID: {current_max_id}, Last date: {current_max_date}"
-        )
-
-    def get_last_transaction_id(self) -> Optional[int]:
-        """
-        Get the ID of the last processed transaction for streaming.
-
-        Returns:
-            The last transaction ID or None if no transactions have been processed
-        """
-        transaction_id = self.cache.get(self.CACHE_KEY_LAST_TRANSACTION_ID)
-        logger.debug(f"Retrieved last transaction ID from cache: {transaction_id}")
-        return transaction_id
-
-    def get_last_transaction_date(self) -> Optional[str]:
-        """
-        Get the date of the last processed transaction for streaming.
-
-        Returns:
-            The last transaction date or None if no transactions have been processed
-        """
-        transaction_date = self.cache.get(self.CACHE_KEY_LAST_TRANSACTION_DATE)
-        logger.debug(f"Retrieved last transaction date from cache: {transaction_date}")
-        return transaction_date
-
-    def reset_streaming_state(self) -> None:
-        """
-        Reset the streaming state, forcing the next stream_new_transactions()
-        call to fetch all available transactions.
-        """
-        logger.warning(
-            "Resetting streaming state - all cached transaction data will be cleared"
-        )
-
-        old_id = self.cache.get(self.CACHE_KEY_LAST_TRANSACTION_ID)
-        old_date = self.cache.get(self.CACHE_KEY_LAST_TRANSACTION_DATE)
-
-        logger.debug(f"Previous state - ID: {old_id}, Date: {old_date}")
-
-        self.cache.delete(self.CACHE_KEY_LAST_TRANSACTION_ID)
-        self.cache.delete(self.CACHE_KEY_LAST_TRANSACTION_DATE)
-
-        logger.success("Streaming state reset successfully")
