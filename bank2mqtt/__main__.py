@@ -177,16 +177,18 @@ def run():
             # Get new transactions
             new_transactions = client.list_transactions(**params)
             if len(new_transactions):
-                for tx in new_transactions:
-                    account = accounts_by_id.get(tx["id_account"])
-                    mqtt_handler.process_transaction({**tx, "account": account})
-                else:
-                    start_date = tx["last_update"]
-                    client.cache.set("last_date", start_date)
-                    params["last_update"] = start_date
-                    logger.debug(
-                        f"Updated last transaction date to: {client.cache.get('last_date')}"
-                    )
+                mqtt_handler.process_transaction(
+                    [
+                        {**tx, "account": accounts_by_id.get(tx["id_account"])}
+                        for tx in new_transactions
+                    ]
+                )
+                start_date = new_transactions[-1]["last_update"]
+                client.cache.set("last_date", start_date)
+                params["last_update"] = start_date
+                logger.debug(
+                    f"Updated last transaction date to: {client.cache.get('last_date')}"
+                )
             else:
                 logger.debug(
                     (

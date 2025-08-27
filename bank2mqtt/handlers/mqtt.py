@@ -1,7 +1,7 @@
 import json
 import os
 import paho.mqtt.client as mqtt
-from typing import Optional
+from typing import Any, Dict, List, Optional
 from loguru import logger
 
 
@@ -83,7 +83,7 @@ class MqttHandler:
         self.client = None
         logger.debug("Connexion MQTT fermée avec succès")
 
-    def process_transaction(self, data: dict) -> None:
+    def process_transaction(self, data: List[Dict[str, Any]]) -> None:
         """
         Publishes the transaction data to the configured MQTT topic.
         """
