@@ -157,22 +157,22 @@ def run():
     url = client.get_webview_url()
     logger.info(f"You can manage your accounts at: {url}")
 
-    # Retrieve bank accounts
-    accounts = client.list_accounts(all_accounts=True)
-    logger.info(f"Retrieved {len(accounts)} accounts")
-    if len(accounts) == 0:
-        logger.warning("No accounts found.")
-        click.echo("No accounts found.")
-        return
-    accounts_by_id = {account["id"]: account for account in accounts}
-
-    start_date = client.cache.get("last_date")
-    params: Dict[str, Any] = {"limit": 1000}
-    if start_date:
-        params["last_update"] = start_date
-    logger.info(f"Starting transaction fetch from date: {start_date}")
-
     with MqttHandler.from_env() as mqtt_handler:
+        # Retrieve bank accounts
+        accounts = client.list_accounts(all_accounts=True)
+        logger.info(f"Retrieved {len(accounts)} accounts")
+        if len(accounts) == 0:
+            logger.warning("No accounts found.")
+            click.echo("No accounts found.")
+            return
+        accounts_by_id = {account["id"]: account for account in accounts}
+
+        start_date = client.cache.get("last_date")
+        params: Dict[str, Any] = {"limit": 1000}
+        if start_date:
+            params["last_update"] = start_date
+        logger.info(f"Starting transaction fetch from date: {start_date}")
+
         while True:
             # Get new transactions
             new_transactions = client.list_transactions(**params)

@@ -2,6 +2,7 @@ import json
 import os
 import paho.mqtt.client as mqtt
 from typing import Optional
+from loguru import logger
 
 
 class MqttHandler:
@@ -41,22 +42,46 @@ class MqttHandler:
         self.client: Optional[mqtt.Client] = None
 
     def __enter__(self):
+        host = self.broker_config["host"]
+        port = self.broker_config["port"]
+        logger.info(f"Initialisation de la connexion MQTT vers {host}:{port}")
         self.client = mqtt.Client()
+
+        # Configurer les credentials si fournis
         if self.broker_config["username"]:
+            logger.debug("Configuration de l'authentification MQTT")
             self.client.username_pw_set(
                 self.broker_config["username"], self.broker_config["password"]
             )
-        self.client.connect(self.broker_config["host"], self.broker_config["port"], 60)
-        self.client.loop_start()
+
+        # Tenter la connexion
+        try:
+            logger.debug("Tentative de connexion au broker MQTT...")
+            self.client.connect(
+                self.broker_config["host"], self.broker_config["port"], 60
+            )
+            self.client.loop_start()
+            logger.success("Connexion MQTT initialisée")
+
+        except Exception as e:
+            # Nettoyer en cas d'erreur
+            logger.error(f"Erreur lors de la connexion MQTT: {e}")
+            if self.client:
+                self.client.loop_stop()
+                self.client = None
+            raise ConnectionError(f"Impossible de se connecter au broker MQTT: {e}")
+
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         if self.client is None:
             raise ValueError("MQTT client is not initialized.")
+        logger.info("Fermeture de la connexion MQTT")
         client: mqtt.Client = self.client
         client.loop_stop()
         client.disconnect()
         self.client = None
+        logger.debug("Connexion MQTT fermée avec succès")
 
     def process_transaction(self, data: dict) -> None:
         """
@@ -75,6 +100,7 @@ class MqttHandler:
         """
         Creates an instance of MqttHandler from environment variables.
         """
+        logger.debug("Création du MqttHandler à partir des variables d'environnement")
         host = os.getenv("MQTT_HOST")
         topic = os.getenv("MQTT_TOPIC")
         port = int(os.getenv("MQTT_PORT", MqttHandler.default_port))
@@ -82,7 +108,12 @@ class MqttHandler:
         password = os.getenv("MQTT_PASSWORD")
 
         if not host or not topic:
+            logger.error("MQTT host et topic ne peuvent pas être vides")
             raise ValueError("MQTT host and topic cannot be empty.")
+
+        logger.info(f"Configuration MQTT: {host}:{port}, topic: {topic}")
+        if username:
+            logger.debug("Authentification MQTT configurée")
 
         return cls(
             host=host,
