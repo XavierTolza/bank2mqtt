@@ -3,7 +3,6 @@ from typing import Dict
 import time
 from typing import Any
 import click
-import pandas as pd
 from bank2mqtt.client import PowensClient as Client
 from bank2mqtt.handlers.mqtt import MqttHandler
 from dotenv import load_dotenv
@@ -139,6 +138,8 @@ def list_transactions(account_id, limit, date_from, date_to, csv_file):
             logger.debug(f"Date range in results: {from_date} to {to_date}")
 
         if csv_file:
+            import pandas as pd
+
             # Save transactions to CSV file using pandas
             logger.info(
                 f"Saving {transaction_count} transactions to CSV file: {csv_file}"
