@@ -3,6 +3,7 @@ from typing import Dict
 import time
 from typing import Any
 import click
+import pandas as pd
 from bank2mqtt.client import PowensClient as Client
 from bank2mqtt.handlers.mqtt import MqttHandler
 from dotenv import load_dotenv
@@ -108,14 +109,15 @@ def list_accounts(all_accounts):
 
 @cli.command()
 @click.option("--account-id", type=int, help="Account ID to filter transactions")
-@click.option("--limit", type=int, default=50, help="Number of transactions to fetch")
+@click.option("--limit", type=int, default=1000, help="Number of transactions to fetch")
 @click.option("--date-from", type=str, help="Start date (YYYY-MM-DD)")
 @click.option("--date-to", type=str, help="End date (YYYY-MM-DD)")
-def list_transactions(account_id, limit, date_from, date_to):
+@click.option("--csv", "csv_file", type=str, help="Save transactions to CSV file")
+def list_transactions(account_id, limit, date_from, date_to, csv_file):
     """List transactions for an account or all accounts."""
     logger.info(
         f"Listing transactions (account_id={account_id}, limit={limit}, "
-        f"date_from={date_from}, date_to={date_to})"
+        f"date_from={date_from}, date_to={date_to}, csv_file={csv_file})"
     )
     try:
         client = Client.from_env()
@@ -127,7 +129,7 @@ def list_transactions(account_id, limit, date_from, date_to):
             account_id=account_id, limit=limit, date_from=date_from, date_to=date_to
         )
 
-        transaction_count = len(txs.get("transactions", []))
+        transaction_count = len(txs)
         logger.success(f"Retrieved {transaction_count} transactions")
 
         # Log transaction summary
@@ -136,7 +138,25 @@ def list_transactions(account_id, limit, date_from, date_to):
             to_date = date_to or "unlimited"
             logger.debug(f"Date range in results: {from_date} to {to_date}")
 
-        click.echo(json.dumps(txs, indent=2))
+        if csv_file:
+            # Save transactions to CSV file using pandas
+            logger.info(
+                f"Saving {transaction_count} transactions to CSV file: {csv_file}"
+            )
+            try:
+                # Convert transactions to DataFrame
+                df = pd.json_normalize(txs)
+
+                # Save to CSV
+                df.to_csv(csv_file, index=False, encoding="utf-8")
+
+                logger.success(f"Transactions successfully saved to: {csv_file}")
+                click.echo(f"Transactions saved to: {csv_file}")
+            except Exception as csv_error:
+                logger.error(f"Failed to save CSV file: {csv_error}")
+                click.echo(f"Error saving CSV file: {csv_error}", err=True)
+        else:
+            click.echo(json.dumps(txs, indent=2))
     except Exception as e:
         logger.error(f"Failed to list transactions: {e}")
         click.echo(f"Error: {e}", err=True)

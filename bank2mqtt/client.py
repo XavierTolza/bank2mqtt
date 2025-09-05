@@ -3,6 +3,7 @@ import os
 import requests
 from typing import Optional, Dict, Any, List, Generator
 from datetime import datetime, timedelta
+import time
 
 from bank2mqtt.cache import Cache
 from loguru import logger
@@ -47,25 +48,22 @@ class PowensClient:
             data = self.cache["authenticate"]
         else:
             logger.debug("Performing fresh authentication request")
-            url = f"{self.base_url}/auth/init"
             payload = {
                 "client_id": self.client_id,
                 "client_secret": self.client_secret,
             }
 
-            logger.debug(f"Authentication URL: {url}")
             logger.debug(f"Client ID: {self.client_id[:8]}...")
 
-            try:
-                resp = requests.post(url, json=payload)
-                resp.raise_for_status()
-                logger.debug(f"Authentication response status: {resp.status_code}")
-                data = resp.json()
-                self.cache["authenticate"] = data
-                logger.info("Authentication data cached successfully")
-            except requests.RequestException as e:
-                logger.error(f"Authentication request failed: {e}")
-                raise
+            resp = self._make_request(
+                method="POST",
+                endpoint="/auth/init",
+                json_data=payload,
+                requires_auth=False,
+            )
+            data = resp.json()
+            self.cache["authenticate"] = data
+            logger.info("Authentication data cached successfully")
 
         token = data.get("auth_token")
         if not token:
@@ -82,30 +80,20 @@ class PowensClient:
         Exchange the permanent token for a one-time code.
         """
         logger.info("Requesting temporary code")
-        self._ensure_authenticated()
 
-        url = f"{self.base_url}/auth/token/code"
-        headers = {"Authorization": f"Bearer {self.auth_token}"}
+        resp = self._make_request(
+            method="GET",
+            endpoint="/auth/token/code",
+        )
 
-        logger.debug(f"Temporary code URL: {url}")
+        code = resp.json().get("code")
+        if not code:
+            logger.error("No code found in temporary code response")
+            raise ValueError("No code in response")
 
-        try:
-            resp = requests.get(url, headers=headers)
-            resp.raise_for_status()
-            logger.debug(f"Temporary code response status: {resp.status_code}")
-
-            code = resp.json().get("code")
-            if not code:
-                logger.error("No code found in temporary code response")
-                raise ValueError("No code in response")
-
-            logger.success("Temporary code generated successfully")
-            logger.debug(f"Code length: {len(code)} characters")
-            return code
-
-        except requests.RequestException as e:
-            logger.error(f"Temporary code request failed: {e}")
-            raise
+        logger.success("Temporary code generated successfully")
+        logger.debug(f"Code length: {len(code)} characters")
+        return code
 
     @cached_property
     def temp_code(self):
@@ -139,66 +127,51 @@ class PowensClient:
         List user bank accounts. If all_accounts=True, include disabled.
         """
         logger.info(f"Listing accounts (include_disabled={all_accounts})")
-        self._ensure_authenticated()
 
-        url = f"{self.base_url}/users/me/accounts"
-        if all_accounts:
-            url += "?all"
+        endpoint = "/users/me/accounts"
+        params = {"all": ""} if all_accounts else None
 
-        headers = {"Authorization": f"Bearer {self.auth_token}"}
-        logger.debug(f"Accounts URL: {url}")
+        resp = self._make_request(
+            method="GET",
+            endpoint=endpoint,
+            params=params,
+        )
 
-        try:
-            resp = requests.get(url, headers=headers)
-            resp.raise_for_status()
-            logger.debug(f"Accounts response status: {resp.status_code}")
+        accounts = resp.json().get("accounts", [])
+        logger.success(f"Retrieved {len(accounts)} accounts")
 
-            accounts = resp.json().get("accounts", [])
-            logger.success(f"Retrieved {len(accounts)} accounts")
+        # Log account details
+        for account in accounts:
+            account_id = account.get("id", "unknown")
+            account_name = account.get("name", "unknown")
+            disabled = account.get("disabled", False)
+            status = "disabled" if disabled else "active"
+            logger.debug(f"Account {account_id}: {account_name} ({status})")
 
-            # Log account details
-            for account in accounts:
-                account_id = account.get("id", "unknown")
-                account_name = account.get("name", "unknown")
-                disabled = account.get("disabled", False)
-                status = "disabled" if disabled else "active"
-                logger.debug(f"Account {account_id}: {account_name} ({status})")
-
-            return accounts
-
-        except requests.RequestException as e:
-            logger.error(f"Failed to list accounts: {e}")
-            raise
+        return accounts
 
     def activate_account(self, account_id: int) -> Dict[str, Any]:
         """
         Activate a disabled account (grant user consent).
         """
         logger.info(f"Activating account {account_id}")
-        self._ensure_authenticated()
 
-        url = f"{self.base_url}/users/me/accounts/{account_id}?all"
-        headers = {
-            "Authorization": f"Bearer {self.auth_token}",
-            "Content-Type": "application/json",
-        }
+        endpoint = f"/users/me/accounts/{account_id}"
+        params = {"all": ""}
         payload = {"disabled": False}
 
-        logger.debug(f"Account activation URL: {url}")
         logger.debug(f"Payload: {payload}")
 
-        try:
-            resp = requests.post(url, json=payload, headers=headers)
-            resp.raise_for_status()
-            logger.debug(f"Account activation response status: {resp.status_code}")
+        resp = self._make_request(
+            method="POST",
+            endpoint=endpoint,
+            params=params,
+            json_data=payload,
+        )
 
-            result = resp.json()
-            logger.success(f"Account {account_id} activated successfully")
-            return result
-
-        except requests.RequestException as e:
-            logger.error(f"Failed to activate account {account_id}: {e}")
-            raise
+        result = resp.json()
+        logger.success(f"Account {account_id} activated successfully")
+        return result
 
     def list_transactions(
         self,
@@ -215,13 +188,12 @@ class PowensClient:
             f"Listing transactions (account_id={account_id}, limit={limit}, "
             f"date_from={date_from}, date_to={date_to})"
         )
-        self._ensure_authenticated()
 
         if account_id:
-            path = f"accounts/{account_id}/transactions"
+            endpoint = f"/users/me/accounts/{account_id}/transactions"
             logger.debug(f"Fetching transactions for specific account: {account_id}")
         else:
-            path = "transactions"
+            endpoint = "/users/me/transactions"
             logger.debug("Fetching transactions across all accounts")
 
         params: Dict[str, Any] = {"limit": limit, **kwargs}
@@ -230,39 +202,137 @@ class PowensClient:
         if date_to:
             params["end_date"] = date_to
 
-        from urllib.parse import urlencode
-
-        url = f"{self.base_url}/users/me/{path}?{urlencode(params)}"
-        headers = {"Authorization": f"Bearer {self.auth_token}"}
-
-        logger.debug(f"Transactions URL: {url}")
-        logger.debug(f"Request parameters: {params}")
-
         transactions = []
+
         try:
-            while url:
-                resp = requests.get(url, headers=headers)
-                resp.raise_for_status()
-                logger.debug(f"Transactions response status: {resp.status_code}")
+            # First request
+            resp = self._make_request(
+                method="GET",
+                endpoint=endpoint,
+                params=params,
+            )
+
+            result = resp.json()
+            transactions.extend(result.get("transactions", []))
+            next_url = (result["_links"].get("next", {}) or {}).get("href")
+
+            # Follow pagination links
+            while next_url and (limit is None or len(transactions) < limit):
+                resp = self._make_request(
+                    method="GET",
+                    endpoint="",
+                    full_url=next_url,
+                )
 
                 result = resp.json()
                 transactions.extend(result.get("transactions", []))
-                url = (result["_links"].get("next", {}) or {}).get("href")
+                next_url = (result["_links"].get("next", {}) or {}).get("href")
 
             transaction_count = len(transactions)
             logger.success(f"Retrieved {transaction_count} transactions")
 
             transactions = sorted(transactions, key=lambda x: x["date"])
+            if limit is not None:
+                transactions = transactions[:limit]
             return transactions
 
         except requests.HTTPError as e:
             error_msg = f"Error fetching transactions: {e}"
-            try:
-                error_msg += f" - Response: {resp.text}"
-            except (NameError, AttributeError):
-                pass
             logger.error(error_msg)
             raise requests.HTTPError(error_msg) from e
+
+    def _make_request(
+        self,
+        method: str,
+        endpoint: str,
+        params: Optional[Dict[str, Any]] = None,
+        json_data: Optional[Dict[str, Any]] = None,
+        headers: Optional[Dict[str, str]] = None,
+        requires_auth: bool = True,
+        full_url: Optional[str] = None,
+    ) -> requests.Response:
+        """
+        Centralized method for making HTTP requests with retry mechanism.
+
+        Args:
+            method: HTTP method (GET, POST, etc.)
+            endpoint: API endpoint (without base URL)
+            params: URL parameters
+            json_data: JSON payload for POST requests
+            headers: Additional headers
+            requires_auth: Whether to add Authorization header
+            full_url: Use this URL instead of building from base_url + endpoint
+
+        Returns:
+            requests.Response object
+        """
+        if requires_auth:
+            self._ensure_authenticated()
+
+        # Build URL
+        if full_url:
+            url = full_url
+        else:
+            url = f"{self.base_url}/{endpoint.lstrip('/')}"
+
+        # Build headers
+        request_headers = {}
+        if requires_auth and self.auth_token:
+            request_headers["Authorization"] = f"Bearer {self.auth_token}"
+        if json_data:
+            request_headers["Content-Type"] = "application/json"
+        if headers:
+            request_headers.update(headers)
+
+        # Log request details
+        logger.debug(f"{method.upper()} {url}")
+        if params:
+            logger.debug(f"Request parameters: {params}")
+        if json_data:
+            logger.debug(f"Request payload: {json_data}")
+
+        # Retry mechanism: 3 attempts with 60s timeout
+        max_retries = 3
+        timeout = 60  # 1 minute timeout
+
+        for attempt in range(max_retries):
+            try:
+                logger.debug(f"Request attempt {attempt + 1}/{max_retries}")
+                resp = requests.request(
+                    method=method,
+                    url=url,
+                    params=params,
+                    json=json_data,
+                    headers=request_headers,
+                    timeout=timeout,
+                )
+                resp.raise_for_status()
+                logger.debug(f"Response status: {resp.status_code}")
+                if attempt > 0:
+                    logger.info(f"Request succeeded on attempt {attempt + 1}")
+                return resp
+
+            except (requests.RequestException, requests.Timeout) as e:
+                is_last_attempt = attempt == max_retries - 1
+                if is_last_attempt:
+                    error_msg = (
+                        f"{method.upper()} request to {url} failed after "
+                        f"{max_retries} attempts: {e}"
+                    )
+                    logger.error(error_msg)
+                    raise
+                else:
+                    wait_time = 2**attempt  # Exponential backoff: 1s, 2s, 4s
+                    warning_msg = (
+                        f"{method.upper()} request to {url} failed on "
+                        f"attempt {attempt + 1}: {e}"
+                    )
+                    logger.warning(warning_msg)
+                    logger.info(f"Retrying in {wait_time} seconds...")
+                    time.sleep(wait_time)
+
+        # This should never be reached due to the raise in the last attempt
+        raise RuntimeError("Unexpected end of retry loop")
 
     def _ensure_authenticated(self):
         if not self.auth_token:
