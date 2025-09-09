@@ -21,50 +21,12 @@ def cli():
 
 
 @cli.command()
-def authenticate():
-    """Authenticate and get a permanent auth token."""
-    logger.info("Starting authentication process")
-    try:
-        client = Client.from_env()
-        logger.debug("Client created from environment variables")
-        token = client.authenticate()
-        logger.success("Authentication successful")
-        logger.debug(f"Token length: {len(token) if token else 0} characters")
-        click.echo(token)
-    except Exception as e:
-        logger.error(f"Authentication failed: {e}")
-        click.echo(f"Error: {e}", err=True)
-        raise click.Abort()
-
-
-@cli.command()
-def get_temp_code():
-    """Get a one-time temporary code."""
-    logger.info("Requesting temporary code")
-    try:
-        client = Client.from_env()
-        logger.debug("Client created from environment variables")
-        client.authenticate()
-        logger.debug("Authentication completed")
-        code = client.get_temp_code()
-        logger.success("Temporary code generated successfully")
-        logger.debug(f"Code length: {len(code) if code else 0} characters")
-        click.echo(code)
-    except Exception as e:
-        logger.error(f"Failed to get temporary code: {e}")
-        click.echo(f"Error: {e}", err=True)
-        raise click.Abort()
-
-
-@cli.command()
-def get_connect_url():
+def get_url():
     """Get the Powens Connect Webview URL"""
     logger.info("Generating Powens Connect Webview URL")
     try:
         client = Client.from_env()
         logger.debug("Client created from environment variables")
-        client.authenticate()
-        logger.debug("Authentication completed")
         url = client.get_webview_url()
         logger.success("Webview URL generated successfully")
         logger.debug(f"Generated URL: {url}")
@@ -83,8 +45,6 @@ def list_accounts(all_accounts):
     try:
         client = Client.from_env()
         logger.debug("Client created from environment variables")
-        client.authenticate()
-        logger.debug("Authentication completed")
         accounts = client.list_accounts(all_accounts=all_accounts)
         logger.success(f"Retrieved {len(accounts)} accounts")
 
@@ -121,8 +81,6 @@ def list_transactions(account_id, limit, date_from, date_to, csv_file):
     try:
         client = Client.from_env()
         logger.debug("Client created from environment variables")
-        client.authenticate()
-        logger.debug("Authentication completed")
 
         txs = client.list_transactions(
             account_id=account_id, limit=limit, date_from=date_from, date_to=date_to
@@ -169,8 +127,6 @@ def run():
     # Get the client
     client = Client.from_env()
     logger.debug("Client created from environment variables")
-    client.authenticate()
-    logger.debug("Authentication completed")
 
     sleep_interval = int(os.getenv("SLEEP_INTERVAL", 60 * 60 * 2))
 
@@ -188,13 +144,12 @@ def run():
             return
         accounts_by_id = {account["id"]: account for account in accounts}
 
-        start_date = client.cache.get("last_date")
         params: Dict[str, Any] = {"limit": 1000}
-        if start_date:
-            params["last_update"] = start_date
-        logger.info(f"Starting transaction fetch from date: {start_date}")
-
         while True:
+            transaction = client.db.latest_sent_transaction(client.db_account_id)
+            latest_date = transaction["date"] if transaction else None
+            transactions = client.list_transactions(date_from=latest_date)
+            raise NotImplementedError
             # Get new transactions
             new_transactions = client.list_transactions(**params)
             if len(new_transactions):
@@ -219,20 +174,6 @@ def run():
                 )
                 time.sleep(sleep_interval)
     client.cache.close()
-
-
-@cli.command()
-def reset_last_date():
-    """Reset the cached last transaction date."""
-    try:
-        client = Client.from_env()
-        client.cache.delete("last_date")
-        logger.success("Last transaction date reset successfully")
-        click.echo("Last transaction date has been reset.")
-    except Exception as e:
-        logger.error(f"Failed to reset last transaction date: {e}")
-        click.echo(f"Error: {e}", err=True)
-        raise click.Abort()
 
 
 if __name__ == "__main__":

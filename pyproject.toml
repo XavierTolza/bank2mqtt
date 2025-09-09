@@ -31,6 +31,7 @@ dependencies = [
     "loguru",
     "platformdirs",
     "paho-mqtt",
+    "sqlalchemy",
 ]
 
 

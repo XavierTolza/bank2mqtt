@@ -1,13 +1,13 @@
+import base64
 from functools import cached_property
 import os
 import requests
-from typing import Optional, Dict, Any, List, Generator
-from datetime import datetime, timedelta
+from typing import Optional, Dict, Any, List
 import time
 
-from bank2mqtt.cache import Cache
 from loguru import logger
-import hashlib
+
+from bank2mqtt.db import DatabaseManager
 
 
 class PowensClient:
@@ -20,57 +20,74 @@ class PowensClient:
         domain: str,
         client_id: str,
         client_secret: str,
+        db: DatabaseManager,
+        auth_token: Optional[str] = None,
         callback_url: Optional[str] = None,
     ):
         logger.debug(f"Initializing PowensClient for domain: {domain}")
         self.base_url = f"https://{domain}.biapi.pro/2.0"
+
+        self.domain = domain
         self.client_id = client_id
         self.client_secret = client_secret
+        self.db = db
         self.callback_url = callback_url
 
-        hash_input = f"{client_id}:{client_secret}".encode("utf-8")
-        self.cache_key = hashlib.md5(hash_input).hexdigest()
-        self.cache = Cache(domain, self.cache_key)
-        self.auth_token = None
+        if auth_token is None:
+            logger.info("No auth_token provided, attempting to retrieve from database")
+            auth_token = self.db.get_authentication_by_credentials(
+                domain=self.domain,
+                client_id=self.client_id,
+                client_secret=self.client_secret,
+            )
+            if auth_token is None:
+                logger.info(
+                    "No auth_token found in database, performing fresh authentication"
+                )
+                auth_token = self.__authenticate()
+                self.db.save_authentication(
+                    domain=self.domain,
+                    client_id=self.client_id,
+                    client_secret=self.client_secret,
+                    auth_token=auth_token,
+                )
+            else:
+                logger.info("Using auth_token retrieved from database")
+                auth_token = auth_token.auth_token
+        else:
+            # Save the auth_token to the database if not existing
+            self.db.save_authentication(
+                domain=self.domain,
+                client_id=self.client_id,
+                client_secret=self.client_secret,
+                auth_token=auth_token,
+            )
+        self.auth_token = auth_token
 
-        logger.debug(f"Base URL: {self.base_url}")
-        logger.debug(f"Cache key: {self.cache_key[:8]}...")
-        logger.debug(f"Callback URL: {callback_url or 'Not set'}")
-
-    def authenticate(self) -> str:
+    def __authenticate(self) -> str:
         """
         Retrieve a permanent auth token for the app.
         """
-        logger.info("Starting authentication process")
+        payload = {
+            "client_id": self.client_id,
+            "client_secret": self.client_secret,
+        }
 
-        if "authenticate" in self.cache:
-            logger.debug("Using cached authentication data")
-            data = self.cache["authenticate"]
-        else:
-            logger.debug("Performing fresh authentication request")
-            payload = {
-                "client_id": self.client_id,
-                "client_secret": self.client_secret,
-            }
+        logger.debug(f"Client ID: {self.client_id[:8]}...")
 
-            logger.debug(f"Client ID: {self.client_id[:8]}...")
-
-            resp = self._make_request(
-                method="POST",
-                endpoint="/auth/init",
-                json_data=payload,
-                requires_auth=False,
-            )
-            data = resp.json()
-            self.cache["authenticate"] = data
-            logger.info("Authentication data cached successfully")
+        resp = self._make_request(
+            method="POST",
+            endpoint="/auth/init",
+            json_data=payload,
+            requires_auth=False,
+        )
+        data = resp.json()
 
         token = data.get("auth_token")
         if not token:
             logger.error("No auth_token found in authentication response")
             raise ValueError("No auth_token in response")
 
-        self.auth_token = token
         logger.success("Authentication completed successfully")
         logger.debug(f"Token length: {len(token)} characters")
         return token
@@ -95,6 +112,7 @@ class PowensClient:
         logger.debug(f"Code length: {len(code)} characters")
         return code
 
+    # TODO cache timeout
     @cached_property
     def temp_code(self):
         return self.get_temp_code()
@@ -234,12 +252,28 @@ class PowensClient:
             transactions = sorted(transactions, key=lambda x: x["date"])
             if limit is not None:
                 transactions = transactions[:limit]
+
+            # Update transactions in DB
+            account_id = self.db_account_id
+            self.db.update_transactions(
+                account_id=account_id,
+                transactions=transactions,
+            )
             return transactions
 
         except requests.HTTPError as e:
             error_msg = f"Error fetching transactions: {e}"
             logger.error(error_msg)
             raise requests.HTTPError(error_msg) from e
+
+    @cached_property
+    def db_account_id(self) -> Optional[int]:
+        account = self.db.get_account(
+            client_id=self.client_id,
+            client_secret=self.client_secret,
+            domain=self.domain,
+        )
+        return account.id if account else None
 
     def _make_request(
         self,
@@ -350,11 +384,17 @@ class PowensClient:
         client_id = os.getenv("POWENS_CLIENT_ID")
         client_secret = os.getenv("POWENS_CLIENT_SECRET")
         callback_url = os.getenv("POWENS_CALLBACK_URL")
+        auth_token = base64.b64decode(os.getenv("POWENS_AUTH_TOKEN_B64", "")).decode(
+            "utf-8"
+        ) or os.getenv("POWENS_AUTH_TOKEN")
+        db_path = os.getenv("DB_PATH", "sqlite:///bank2mqtt.db")
 
         logger.debug(f"Environment variables - Domain: {domain}")
         logger.debug(f"Client ID: {client_id[:8] + '...' if client_id else 'Not set'}")
         logger.debug(f"Client secret: {'Set' if client_secret else 'Not set'}")
         logger.debug(f"Callback URL: {callback_url or 'Not set'}")
+        logger.debug(f"Database path: {db_path}")
+        logger.debug(f"Auth token: {'Set' if auth_token else 'Not set'}")
 
         if not all([domain, client_id, client_secret]):
             missing_vars = []
@@ -371,5 +411,16 @@ class PowensClient:
                 "POWENS_CLIENT_SECRET must be set"
             )
 
+        # Check no None values
+        if None in [domain, client_id, client_secret]:
+            raise ValueError("Domain, client_id, and client_secret must not be None")
+
         logger.success("Successfully created PowensClient from environment")
-        return cls(domain, client_id, client_secret, callback_url)  # type: ignore
+        return cls(
+            domain=domain,  # pyright: ignore[reportArgumentType]
+            client_id=client_id,  # pyright: ignore[reportArgumentType]
+            client_secret=client_secret,  # pyright: ignore[reportArgumentType]
+            callback_url=callback_url,
+            auth_token=auth_token,
+            db=DatabaseManager(database_url=db_path),
+        )  # type: ignore

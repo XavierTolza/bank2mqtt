@@ -4,3 +4,4 @@ click
 loguru
 platformdirs
 paho-mqtt
+sqlalchemy
