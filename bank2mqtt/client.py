@@ -20,7 +20,6 @@ class PowensClient:
         domain: str,
         client_id: str,
         client_secret: str,
-        db: DatabaseManager,
         auth_token: Optional[str] = None,
         callback_url: Optional[str] = None,
     ):
@@ -30,41 +29,10 @@ class PowensClient:
         self.domain = domain
         self.client_id = client_id
         self.client_secret = client_secret
-        self.db = db
         self.callback_url = callback_url
-
-        if auth_token is None:
-            logger.info("No auth_token provided, attempting to retrieve from database")
-            auth_token = self.db.get_authentication_by_credentials(
-                domain=self.domain,
-                client_id=self.client_id,
-                client_secret=self.client_secret,
-            )
-            if auth_token is None:
-                logger.info(
-                    "No auth_token found in database, performing fresh authentication"
-                )
-                auth_token = self.__authenticate()
-                self.db.save_authentication(
-                    domain=self.domain,
-                    client_id=self.client_id,
-                    client_secret=self.client_secret,
-                    auth_token=auth_token,
-                )
-            else:
-                logger.info("Using auth_token retrieved from database")
-                auth_token = auth_token.auth_token
-        else:
-            # Save the auth_token to the database if not existing
-            self.db.save_authentication(
-                domain=self.domain,
-                client_id=self.client_id,
-                client_secret=self.client_secret,
-                auth_token=auth_token,
-            )
         self.auth_token = auth_token
 
-    def __authenticate(self) -> str:
+    def get_new_auth_token(self) -> str:
         """
         Retrieve a permanent auth token for the app.
         """
@@ -253,27 +221,12 @@ class PowensClient:
             if limit is not None:
                 transactions = transactions[:limit]
 
-            # Update transactions in DB
-            account_id = self.db_account_id
-            self.db.update_transactions(
-                account_id=account_id,
-                transactions=transactions,
-            )
             return transactions
 
         except requests.HTTPError as e:
             error_msg = f"Error fetching transactions: {e}"
             logger.error(error_msg)
             raise requests.HTTPError(error_msg) from e
-
-    @cached_property
-    def db_account_id(self) -> Optional[int]:
-        account = self.db.get_account(
-            client_id=self.client_id,
-            client_secret=self.client_secret,
-            domain=self.domain,
-        )
-        return account.id if account else None
 
     def _make_request(
         self,
@@ -387,13 +340,11 @@ class PowensClient:
         auth_token = base64.b64decode(os.getenv("POWENS_AUTH_TOKEN_B64", "")).decode(
             "utf-8"
         ) or os.getenv("POWENS_AUTH_TOKEN")
-        db_path = os.getenv("DB_PATH", "sqlite:///bank2mqtt.db")
 
         logger.debug(f"Environment variables - Domain: {domain}")
         logger.debug(f"Client ID: {client_id[:8] + '...' if client_id else 'Not set'}")
         logger.debug(f"Client secret: {'Set' if client_secret else 'Not set'}")
         logger.debug(f"Callback URL: {callback_url or 'Not set'}")
-        logger.debug(f"Database path: {db_path}")
         logger.debug(f"Auth token: {'Set' if auth_token else 'Not set'}")
 
         if not all([domain, client_id, client_secret]):
@@ -422,5 +373,4 @@ class PowensClient:
             client_secret=client_secret,  # pyright: ignore[reportArgumentType]
             callback_url=callback_url,
             auth_token=auth_token,
-            db=DatabaseManager(database_url=db_path),
         )  # type: ignore

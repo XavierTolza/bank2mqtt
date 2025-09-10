@@ -4,13 +4,16 @@ import time
 from typing import Any
 import click
 from bank2mqtt.client import PowensClient as Client
+from bank2mqtt.config import Config
+from bank2mqtt.db import Bank2MQTTDatabase
 from bank2mqtt.handlers.mqtt import MqttHandler
 from dotenv import load_dotenv
 import json
 from loguru import logger
 
-# Load environment variables
-load_dotenv()
+conf = Config.from_env()
+db = conf.db
+client = conf.client
 
 
 @click.group()
@@ -23,13 +26,10 @@ def cli():
 @cli.command()
 def get_url():
     """Get the Powens Connect Webview URL"""
-    logger.info("Generating Powens Connect Webview URL")
+    logger.debug("Generating Powens Connect Webview URL")
     try:
-        client = Client.from_env()
-        logger.debug("Client created from environment variables")
         url = client.get_webview_url()
-        logger.success("Webview URL generated successfully")
-        logger.debug(f"Generated URL: {url}")
+        click.echo("Your Powens Connect Webview URL is:")
         click.echo(url)
     except Exception as e:
         logger.error(f"Failed to get connect URL: {e}")
@@ -43,8 +43,6 @@ def list_accounts(all_accounts):
     """List user bank accounts."""
     logger.info(f"Listing accounts (include_disabled={all_accounts})")
     try:
-        client = Client.from_env()
-        logger.debug("Client created from environment variables")
         accounts = client.list_accounts(all_accounts=all_accounts)
         logger.success(f"Retrieved {len(accounts)} accounts")
 
