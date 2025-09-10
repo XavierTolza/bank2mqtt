@@ -7,8 +7,6 @@ import time
 
 from loguru import logger
 
-from bank2mqtt.db import DatabaseManager
-
 
 class PowensClient:
     """

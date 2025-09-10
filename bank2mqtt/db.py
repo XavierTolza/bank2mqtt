@@ -14,7 +14,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime as dt
 
 Base = declarative_base()
 
@@ -34,7 +34,7 @@ class Client(Base):
     id = Column(String, primary_key=True)
     domain = Column(String, nullable=False)
     redirect_url = Column(String, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=dt.now)
     authentications = relationship("Authentication", back_populates="client")
 
 
@@ -56,7 +56,7 @@ class Authentication(Base):
     client_id = Column(String, ForeignKey("clients.id"))
     client_secret = Column(String, nullable=False)
     auth_token = Column(String, unique=True, nullable=False)
-    token_creation_date = Column(DateTime, default=datetime.utcnow)
+    token_creation_date = Column(DateTime, default=dt.now)
     type = Column(String, nullable=False)
     id_user = Column(Integer, nullable=False)
     expires_in = Column(Integer, nullable=True)
@@ -162,7 +162,7 @@ class Transaction(Base):
     simplified_wording = Column(String, nullable=False)
     wording = Column(String, nullable=True)
     categories = Column(String, nullable=True)  # JSON string
-    date_scraped = Column(DateTime, default=datetime.utcnow)
+    date_scraped = Column(DateTime, default=dt.now)
     coming = Column(Boolean, default=False)
     active = Column(Boolean, default=True)
     id_cluster = Column(Integer, nullable=True)
@@ -206,8 +206,8 @@ class Bank2MQTTDatabase:
             )
         return cls(db_url)
 
-    def __init__(self, db_url):
-        self.engine = create_engine(db_url)
+    def __init__(self, url):
+        self.engine = create_engine(url)
         self.Session = sessionmaker(bind=self.engine)
         Base.metadata.create_all(self.engine)
 
