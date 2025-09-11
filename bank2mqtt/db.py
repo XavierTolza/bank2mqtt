@@ -2,7 +2,9 @@
 # Models: Clients, Authentication, Accounts, Transactions
 # Features: context manager, CRUD methods, documentation
 
+from typing import Dict, Optional, Tuple
 from sqlalchemy import (
+    BinaryExpression,
     create_engine,
     Column,
     String,
@@ -16,26 +18,37 @@ from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 from contextlib import contextmanager
 from datetime import datetime as dt
 
-Base = declarative_base()
 
 # --- Models ---
 
 
-class Client(Base):
+class _Base:
+    def to_dict(self):
+        """Convert SQLAlchemy model instance to dictionary."""
+        return {
+            c.name: getattr(self, c.name)
+            for c in self.__table__.columns  # type: ignore
+        }
+
+
+Base = declarative_base(cls=_Base)
+
+
+class Domain(Base):
     """
     Represents a client application.
     id: Primary key (string)
     domain: Client domain
-    redirect_url: Client redirect URL
+    redirect_uri: Client redirect URL
     created_at: Creation datetime
     """
 
-    __tablename__ = "clients"
-    id = Column(String, primary_key=True)
-    domain = Column(String, nullable=False)
-    redirect_url = Column(String, nullable=False)
+    __tablename__ = "domain"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    domain = Column(String, nullable=False, unique=True)
+    redirect_uri = Column(String, nullable=True)
     created_at = Column(DateTime, default=dt.now)
-    authentications = relationship("Authentication", back_populates="client")
+    authentications = relationship("Authentication", back_populates="domain")
 
 
 class Authentication(Base):
@@ -53,14 +66,12 @@ class Authentication(Base):
 
     __tablename__ = "authentications"
     id = Column(Integer, primary_key=True)
-    client_id = Column(String, ForeignKey("clients.id"))
+    domain_id = Column(String, ForeignKey("domain.id"))
+    client_id = Column(String, nullable=False)
     client_secret = Column(String, nullable=False)
     auth_token = Column(String, unique=True, nullable=False)
     token_creation_date = Column(DateTime, default=dt.now)
-    type = Column(String, nullable=False)
-    id_user = Column(Integer, nullable=False)
-    expires_in = Column(Integer, nullable=True)
-    client = relationship("Client", back_populates="authentications")
+    domain = relationship("Domain", back_populates="authentications")
 
 
 class Account(Base):
@@ -97,11 +108,11 @@ class Account(Base):
     balance = Column(DECIMAL, nullable=True)
     coming = Column(DECIMAL, nullable=True)
     display = Column(Boolean, default=True)
-    last_update = Column(DateTime, nullable=True)
+    # last_update = Column(DateTime, nullable=True)
     deleted = Column(DateTime, nullable=True)
     disabled = Column(DateTime, nullable=True)
     iban = Column(String, nullable=True)
-    currency = Column(String, nullable=True)
+    # currency = Column(String, nullable=True)
     type = Column(String, nullable=False)
     id_type = Column(Integer, nullable=False)
     bookmarked = Column(Integer, default=0)
@@ -146,37 +157,28 @@ class Transaction(Base):
     __tablename__ = "transactions"
     id = Column(Integer, primary_key=True)
     id_account = Column(Integer, ForeignKey("accounts.id"))
-    application_date = Column(DateTime, nullable=True)
-    date = Column(DateTime, nullable=False)
-    datetime = Column(DateTime, nullable=True)
-    vdate = Column(DateTime, nullable=True)
-    vdatetime = Column(DateTime, nullable=True)
-    rdate = Column(DateTime, nullable=False)
-    rdatetime = Column(DateTime, nullable=True)
-    bdate = Column(DateTime, nullable=True)
-    bdatetime = Column(DateTime, nullable=True)
+    application_date = Column(String, nullable=True)
+    date = Column(String, nullable=False)
+    vdate = Column(String, nullable=True)
+    rdate = Column(String, nullable=False)
+    bdate = Column(String, nullable=True)
     value = Column(DECIMAL, nullable=True)
-    gross_value = Column(DECIMAL, nullable=True)
     type = Column(String, nullable=False)
     original_wording = Column(String, nullable=False)
     simplified_wording = Column(String, nullable=False)
     wording = Column(String, nullable=True)
     categories = Column(String, nullable=True)  # JSON string
-    date_scraped = Column(DateTime, default=dt.now)
+    date_scraped = Column(String, nullable=False)
     coming = Column(Boolean, default=False)
     active = Column(Boolean, default=True)
     id_cluster = Column(Integer, nullable=True)
     comment = Column(String, nullable=True)
-    last_update = Column(DateTime, nullable=True)
-    deleted = Column(DateTime, nullable=True)
+    last_update = Column(String, nullable=True)
+    deleted = Column(String, nullable=True)
     original_value = Column(DECIMAL, nullable=True)
     original_gross_value = Column(DECIMAL, nullable=True)
-    original_currency = Column(String, nullable=True)
-    commission = Column(DECIMAL, nullable=True)
-    commission_currency = Column(String, nullable=True)
     country = Column(String, nullable=True)
     card = Column(String, nullable=True)
-    counterparty = Column(String, nullable=True)
     account = relationship("Account", back_populates="transactions")
 
 
@@ -202,7 +204,8 @@ class Bank2MQTTDatabase:
         db_url = os.getenv("BANK2MQTT_DB_URL") or os.getenv("DATABASE_URL")
         if not db_url:
             raise ValueError(
-                "Database URL not found in environment variables (BANK2MQTT_DB_URL or DATABASE_URL)"
+                "Database URL not found in environment variables (BANK2MQTT_DB_URL "
+                "or DATABASE_URL)"
             )
         return cls(db_url)
 
@@ -232,52 +235,83 @@ class Bank2MQTTDatabase:
 
     # --- Methods ---
 
-    def get_client_and_latest_auth(self, domain, client_id):
+    def get_domain_and_latest_auth(
+        self, domain, client_id
+    ) -> Tuple[Optional[Dict], Optional[Dict]]:
         """
-        Get client and latest authentication by domain and client_id.
-        Returns (Client, Authentication) or (None, None)
+        Get domain and latest authentication by domain and client_id.
+        Returns (Domain, Authentication) or (None, None)
         """
         with self.session_scope() as session:
-            client = (
-                session.query(Client).filter_by(domain=domain, id=client_id).first()
-            )
-            if not client:
+            domain = session.query(Domain).filter_by(domain=domain).first()
+            if not domain:
                 return None, None
             auth = (
                 session.query(Authentication)
-                .filter_by(client_id=client_id)
+                .filter_by(domain_id=domain.id)
                 .order_by(Authentication.token_creation_date.desc())
                 .first()
             )
-            return client, auth
+            return domain.to_dict(), auth.to_dict() if auth else None
 
-    def register_client_and_auth(self, client_data, auth_data):
+    def register_domain_and_auth(self, domain_data, auth_data):
         """
-        Register a new client and authentication.
-        client_data: dict for Client
+        Register a new domain and authentication.
+        domain_data: dict for Domain
         auth_data: dict for Authentication
-        Returns (Client, Authentication)
+        Returns (Domain, Authentication)
         """
         with self.session_scope() as session:
-            client = Client(**client_data)
-            session.add(client)
-            session.flush()
-            auth_data["client_id"] = client.id
-            auth = Authentication(**auth_data)
-            session.add(auth)
-            session.commit()
-            return client, auth
+            # Insert domain
+            # Check if domain already exists
+            if (
+                domain := session.query(Domain)
+                .filter_by(domain=domain_data["domain"])
+                .first()
+            ):
+                # Domain already exists
+                domain_id = domain.id
+            else:
+                domain = Domain(**domain_data)
+                session.add(domain)
+                session.flush()
+                domain_id = domain.id
 
-    def filter_transactions(self, **filters):
+            # Insert authentication
+            # Check if auth with same token already exists
+            if (
+                auth := session.query(Authentication)
+                .filter_by(auth_token=auth_data["auth_token"])
+                .first()
+            ):
+                return domain, auth  # Auth already exists
+            else:
+                # Insert new auth
+                auth = Authentication(**auth_data, domain_id=domain_id)
+                session.add(auth)
+                session.commit()
+            return domain, auth
+
+    def filter_transactions(self, order=None, **filters):
         """
         Filter and retrieve transactions by filters (kwargs).
+        order: SQLAlchemy order expression or column name string
         Returns list of Transaction
         """
         with self.session_scope() as session:
             query = session.query(Transaction)
             for key, value in filters.items():
-                query = query.filter(getattr(Transaction, key) == value)
-            return query.all()
+                if not isinstance(value, BinaryExpression):
+                    value = getattr(Transaction, key) == value
+                query = query.filter(value)
+
+            if order is not None:
+                if isinstance(order, str):
+                    order = getattr(Transaction, order)
+                query = query.order_by(order)
+
+            res = [i.to_dict() for i in query.all()]
+            return res
 
     def get_latest_transactions(self, auth_id, limit=10):
         """
@@ -300,6 +334,20 @@ class Bank2MQTTDatabase:
             )
             return txs
 
+    def latest_transaction_date(
+        self, account_id: Optional[int] = None
+    ) -> Optional[str]:
+        """
+        Get the latest transaction date, optionally filtered by account.
+        Returns datetime or None
+        """
+        with self.session_scope() as session:
+            query = session.query(Transaction).order_by(Transaction.date.desc())
+            if account_id is not None:
+                query = query.filter(Transaction.id_account == account_id)
+            tx = query.first()
+            return str(tx.date) if tx else None
+
     def upsert_transactions(self, transactions):
         """
         Register new transactions from a list.
@@ -315,7 +363,13 @@ class Bank2MQTTDatabase:
                     for k, v in tx_data.items():
                         setattr(tx, k, v)
                 else:
-                    tx = Transaction(**tx_data)
+                    tx = Transaction(
+                        **{
+                            k: v
+                            for k, v in tx_data.items()
+                            if k in Transaction.__table__.columns.keys()
+                        }
+                    )
                     session.add(tx)
                 results.append(tx)
             session.commit()
@@ -336,7 +390,13 @@ class Bank2MQTTDatabase:
                     for k, v in acc_data.items():
                         setattr(acc, k, v)
                 else:
-                    acc = Account(**acc_data)
+                    acc = Account(
+                        **{
+                            k: v
+                            for k, v in acc_data.items()
+                            if k in Account.__table__.columns.keys()
+                        }
+                    )
                     session.add(acc)
                 results.append(acc)
             session.commit()

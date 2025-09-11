@@ -1,8 +1,8 @@
 import json
-import os
 import paho.mqtt.client as mqtt
 from typing import Any, Dict, List, Optional
 from loguru import logger
+from bank2mqtt.constants import default_mqtt_port, default_mqtt_topic
 
 
 class MqttHandler:
@@ -10,12 +10,12 @@ class MqttHandler:
     A handler to publish transaction data to an MQTT topic.
     """
 
-    default_port = 1883
+    default_port = default_mqtt_port
 
     def __init__(
         self,
         host: str,
-        topic: str,
+        topic: str = default_mqtt_topic,
         port: int = default_port,
         username: Optional[str] = None,
         password: Optional[str] = None,
@@ -94,31 +94,3 @@ class MqttHandler:
         payload = json.dumps(data, ensure_ascii=False)
         result = client.publish(self.topic, payload)
         result.wait_for_publish()
-
-    @classmethod
-    def from_env(cls) -> "MqttHandler":
-        """
-        Creates an instance of MqttHandler from environment variables.
-        """
-        logger.debug("Création du MqttHandler à partir des variables d'environnement")
-        host = os.getenv("MQTT_HOST")
-        topic = os.getenv("MQTT_TOPIC")
-        port = int(os.getenv("MQTT_PORT", MqttHandler.default_port))
-        username = os.getenv("MQTT_USERNAME")
-        password = os.getenv("MQTT_PASSWORD")
-
-        if not host or not topic:
-            logger.error("MQTT host et topic ne peuvent pas être vides")
-            raise ValueError("MQTT host and topic cannot be empty.")
-
-        logger.info(f"Configuration MQTT: {host}:{port}, topic: {topic}")
-        if username:
-            logger.debug("Authentification MQTT configurée")
-
-        return cls(
-            host=host,
-            topic=topic,
-            port=port,
-            username=username,
-            password=password,
-        )
