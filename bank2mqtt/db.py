@@ -4,6 +4,7 @@
 
 from sqlite3 import DatabaseError
 from typing import Dict, Optional, Tuple
+from venv import logger
 from sqlalchemy import (
     BinaryExpression,
     create_engine,
@@ -211,6 +212,7 @@ class Bank2MQTTDatabase:
         return cls(db_url)
 
     def __init__(self, url):
+        logger.info(f"Opening database at {url}")
         try:
             self.engine = create_engine(url)
             self.Session = sessionmaker(bind=self.engine)
