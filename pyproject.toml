@@ -33,6 +33,7 @@ dependencies = [
     "paho-mqtt",
     "sqlalchemy",
     "jsonschema",
+    "pandas",
 ]
 
 

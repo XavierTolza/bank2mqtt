@@ -1,7 +1,6 @@
 from functools import cached_property
 import os
 from dotenv import load_dotenv
-import yaml
 from bank2mqtt.constants import default_sleep_interval, default_mqtt_port
 from bank2mqtt.db import Bank2MQTTDatabase
 from bank2mqtt.client import PowensClient as Client
@@ -93,11 +92,6 @@ class Config(dict):
                 "settings": {"sleep_interval": sleep_interval},
             }
         )
-
-    @classmethod
-    def from_yaml(cls, path):
-        with open(path, "r") as f:
-            return cls(yaml.safe_load(f))
 
     @cached_property
     def db(self):

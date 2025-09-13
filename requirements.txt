@@ -6,3 +6,4 @@ platformdirs
 paho-mqtt
 sqlalchemy
 jsonschema
+pandas

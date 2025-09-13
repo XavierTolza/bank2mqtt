@@ -21,17 +21,7 @@ RUN pip install --no-cache-dir /tmp/app/ && rm -rf /tmp/app
 # Créer un utilisateur non-root pour des raisons de sécurité avec l'UID/GID spécifié
 RUN addgroup -g ${USER_GID} appgroup && adduser -u ${USER_UID} -G appgroup -S appuser
 
-# Créer le répertoire de cache et lui donner les bonnes permissions
-RUN mkdir -p /home/appuser/.cache/bank2mqtt && \
-    chown -R appuser:appgroup /home/appuser/.cache &&\
-    ln -s /home/appuser/.cache/bank2mqtt /cache
-
 USER appuser
-
-# Définir le volume pour la persistance du cache
-# L'utilisateur doit monter un volume sur /home/appuser/.cache/bank2mqtt
-# Exemple d'utilisation: docker run -v ./cache:/home/appuser/.cache/bank2mqtt bank2mqtt
-VOLUME ["/home/appuser/.cache/bank2mqtt"]
 
 # Commande pour lancer l'application en mode streaming continu
 ENTRYPOINT ["python", "-m", "bank2mqtt", "run"]

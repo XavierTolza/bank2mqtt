@@ -2,6 +2,7 @@
 # Models: Clients, Authentication, Accounts, Transactions
 # Features: context manager, CRUD methods, documentation
 
+from sqlite3 import DatabaseError
 from typing import Dict, Optional, Tuple
 from sqlalchemy import (
     BinaryExpression,
@@ -210,9 +211,12 @@ class Bank2MQTTDatabase:
         return cls(db_url)
 
     def __init__(self, url):
-        self.engine = create_engine(url)
-        self.Session = sessionmaker(bind=self.engine)
-        Base.metadata.create_all(self.engine)
+        try:
+            self.engine = create_engine(url)
+            self.Session = sessionmaker(bind=self.engine)
+            Base.metadata.create_all(self.engine)
+        except DatabaseError as e:
+            raise RuntimeError(f"Failed to open Database {url}: {e}") from e
 
     @contextmanager
     def session_scope(self):
