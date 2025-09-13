@@ -1,13 +1,9 @@
-import base64
 from functools import cached_property
-import os
 import requests
 from typing import Optional, Dict, Any, List
 import time
 
 from loguru import logger
-
-from bank2mqtt.db import DatabaseManager
 
 
 class PowensClient:
@@ -20,9 +16,8 @@ class PowensClient:
         domain: str,
         client_id: str,
         client_secret: str,
-        db: DatabaseManager,
         auth_token: Optional[str] = None,
-        callback_url: Optional[str] = None,
+        redirect_uri: Optional[str] = None,
     ):
         logger.debug(f"Initializing PowensClient for domain: {domain}")
         self.base_url = f"https://{domain}.biapi.pro/2.0"
@@ -30,41 +25,10 @@ class PowensClient:
         self.domain = domain
         self.client_id = client_id
         self.client_secret = client_secret
-        self.db = db
-        self.callback_url = callback_url
-
-        if auth_token is None:
-            logger.info("No auth_token provided, attempting to retrieve from database")
-            auth_token = self.db.get_authentication_by_credentials(
-                domain=self.domain,
-                client_id=self.client_id,
-                client_secret=self.client_secret,
-            )
-            if auth_token is None:
-                logger.info(
-                    "No auth_token found in database, performing fresh authentication"
-                )
-                auth_token = self.__authenticate()
-                self.db.save_authentication(
-                    domain=self.domain,
-                    client_id=self.client_id,
-                    client_secret=self.client_secret,
-                    auth_token=auth_token,
-                )
-            else:
-                logger.info("Using auth_token retrieved from database")
-                auth_token = auth_token.auth_token
-        else:
-            # Save the auth_token to the database if not existing
-            self.db.save_authentication(
-                domain=self.domain,
-                client_id=self.client_id,
-                client_secret=self.client_secret,
-                auth_token=auth_token,
-            )
+        self.redirect_uri = redirect_uri
         self.auth_token = auth_token
 
-    def __authenticate(self) -> str:
+    def get_new_auth_token(self) -> str:
         """
         Retrieve a permanent auth token for the app.
         """
@@ -129,8 +93,8 @@ class PowensClient:
             "code": self.temp_code,
             **kwargs,
         }
-        if self.callback_url is not None:
-            params["redirect_uri"] = self.callback_url
+        if self.redirect_uri is not None:
+            params["redirect_uri"] = self.redirect_uri
 
         from urllib.parse import urlencode
 
@@ -140,7 +104,7 @@ class PowensClient:
 
         return url
 
-    def list_accounts(self, all_accounts: bool = False) -> List[Dict[str, Any]]:
+    def list_accounts(self, all_accounts: bool = True) -> List[Dict[str, Any]]:
         """
         List user bank accounts. If all_accounts=True, include disabled.
         """
@@ -216,9 +180,9 @@ class PowensClient:
 
         params: Dict[str, Any] = {"limit": limit, **kwargs}
         if date_from:
-            params["start_date"] = date_from
+            params["min_date"] = date_from
         if date_to:
-            params["end_date"] = date_to
+            params["max_date"] = date_to
 
         transactions = []
 
@@ -253,27 +217,12 @@ class PowensClient:
             if limit is not None:
                 transactions = transactions[:limit]
 
-            # Update transactions in DB
-            account_id = self.db_account_id
-            self.db.update_transactions(
-                account_id=account_id,
-                transactions=transactions,
-            )
             return transactions
 
         except requests.HTTPError as e:
             error_msg = f"Error fetching transactions: {e}"
             logger.error(error_msg)
             raise requests.HTTPError(error_msg) from e
-
-    @cached_property
-    def db_account_id(self) -> Optional[int]:
-        account = self.db.get_account(
-            client_id=self.client_id,
-            client_secret=self.client_secret,
-            domain=self.domain,
-        )
-        return account.id if account else None
 
     def _make_request(
         self,
@@ -375,52 +324,3 @@ class PowensClient:
                 "Client is not authenticated. Call authenticate() first."
             )
         logger.debug("Authentication check passed")
-
-    @classmethod
-    def from_env(cls) -> "PowensClient":
-        logger.info("Creating PowensClient from environment variables")
-
-        domain = os.getenv("POWENS_DOMAIN")
-        client_id = os.getenv("POWENS_CLIENT_ID")
-        client_secret = os.getenv("POWENS_CLIENT_SECRET")
-        callback_url = os.getenv("POWENS_CALLBACK_URL")
-        auth_token = base64.b64decode(os.getenv("POWENS_AUTH_TOKEN_B64", "")).decode(
-            "utf-8"
-        ) or os.getenv("POWENS_AUTH_TOKEN")
-        db_path = os.getenv("DB_PATH", "sqlite:///bank2mqtt.db")
-
-        logger.debug(f"Environment variables - Domain: {domain}")
-        logger.debug(f"Client ID: {client_id[:8] + '...' if client_id else 'Not set'}")
-        logger.debug(f"Client secret: {'Set' if client_secret else 'Not set'}")
-        logger.debug(f"Callback URL: {callback_url or 'Not set'}")
-        logger.debug(f"Database path: {db_path}")
-        logger.debug(f"Auth token: {'Set' if auth_token else 'Not set'}")
-
-        if not all([domain, client_id, client_secret]):
-            missing_vars = []
-            if not domain:
-                missing_vars.append("POWENS_DOMAIN")
-            if not client_id:
-                missing_vars.append("POWENS_CLIENT_ID")
-            if not client_secret:
-                missing_vars.append("POWENS_CLIENT_SECRET")
-
-            logger.error(f"Missing required environment variables: {missing_vars}")
-            raise ValueError(
-                "Environment variables POWENS_DOMAIN, POWENS_CLIENT_ID, and "
-                "POWENS_CLIENT_SECRET must be set"
-            )
-
-        # Check no None values
-        if None in [domain, client_id, client_secret]:
-            raise ValueError("Domain, client_id, and client_secret must not be None")
-
-        logger.success("Successfully created PowensClient from environment")
-        return cls(
-            domain=domain,  # pyright: ignore[reportArgumentType]
-            client_id=client_id,  # pyright: ignore[reportArgumentType]
-            client_secret=client_secret,  # pyright: ignore[reportArgumentType]
-            callback_url=callback_url,
-            auth_token=auth_token,
-            db=DatabaseManager(database_url=db_path),
-        )  # type: ignore

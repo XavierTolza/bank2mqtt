@@ -32,6 +32,8 @@ dependencies = [
     "platformdirs",
     "paho-mqtt",
     "sqlalchemy",
+    "jsonschema",
+    "pandas",
 ]
 
 

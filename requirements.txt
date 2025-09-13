@@ -5,3 +5,5 @@ loguru
 platformdirs
 paho-mqtt
 sqlalchemy
+jsonschema
+pandas
