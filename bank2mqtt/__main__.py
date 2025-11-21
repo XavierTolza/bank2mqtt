@@ -137,6 +137,17 @@ def run():
     with mqtt:
         while True:
             accounts = get_accounts()
+            last_account_balance = db.last_account_balance()
+
+            # Update account balances if changed
+            accounts_balance_to_update = [
+                acc
+                for acc_id, acc in accounts.items()
+                if last_account_balance.get(acc_id)
+                != datetime.fromisoformat(acc["last_update"])
+            ]
+            if len(accounts_balance_to_update):
+                db.upsert_account_balances(accounts_balance_to_update)
 
             if len(accounts) == 0:
                 logger.warning("No accounts found.")

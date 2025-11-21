@@ -19,6 +19,8 @@ from sqlalchemy import (
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 from contextlib import contextmanager
 from datetime import datetime as dt
+import os
+from sqlalchemy import func
 
 
 # --- Models ---
@@ -184,6 +186,24 @@ class Transaction(Base):
     account = relationship("Account", back_populates="transactions")
 
 
+class AccountBalance(Base):
+    """
+    Store account balance snapshot.
+    Fields:
+      - account_id: FK to accounts.id (unique, one-to-one)
+      - balance: current balance
+      - coming_balance: pending/coming balance
+      - last_update: datetime of last update
+    """
+
+    __tablename__ = "account_balances"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False, unique=True)
+    balance = Column(DECIMAL, nullable=False)
+    coming_balance = Column(DECIMAL, nullable=False)
+    last_update = Column(DateTime, nullable=False)
+
+
 # --- Database Driver ---
 
 
@@ -201,7 +221,6 @@ class Bank2MQTTDatabase:
         Create a Bank2MQTTDatabase instance using environment variables.
         Uses BANK2MQTT_DB_URL or DATABASE_URL.
         """
-        import os
 
         db_url = os.getenv("BANK2MQTT_DB_URL") or os.getenv("DATABASE_URL")
         if not db_url:
@@ -407,3 +426,98 @@ class Bank2MQTTDatabase:
                 results.append(acc)
             session.commit()
             return results
+
+    # New methods: get_account_balance, upsert_account_balance, upsert_account_balances
+    def get_account_balance(self, account_id):
+        """
+        Return the AccountBalance row for account_id or None.
+        """
+        with self.session_scope() as session:
+            ab = session.query(AccountBalance).filter_by(account_id=account_id).first()
+            return ab
+
+    def upsert_account_balance(self, account_id, balance, coming_balance, last_update):
+        """
+        Insert or update a single AccountBalance.
+        If an existing record for account_id has the same last_update, no change is made.
+        last_update may be a datetime, ISO string, or numeric timestamp.
+        Returns the AccountBalance instance (existing or new).
+        """
+        # normalize last_update to datetime
+        if isinstance(last_update, str):
+            try:
+                last_dt = dt.fromisoformat(last_update)
+            except Exception:
+                # fallback: try to parse as numeric timestamp
+                try:
+                    last_dt = dt.fromtimestamp(float(last_update))
+                except Exception:
+                    raise ValueError(
+                        "last_update string is not ISO format or timestamp"
+                    )
+        elif isinstance(last_update, (int, float)):
+            last_dt = dt.fromtimestamp(last_update)
+        elif isinstance(last_update, dt):
+            last_dt = last_update
+        else:
+            raise ValueError("Unsupported last_update type")
+
+        with self.session_scope() as session:
+            existing = (
+                session.query(AccountBalance).filter_by(account_id=account_id).first()
+            )
+            if existing:
+                # If last_update is identical, do nothing
+                if existing.last_update == last_dt:
+                    return existing
+                # update fields and return
+                existing.balance = balance
+                existing.coming_balance = coming_balance
+                existing.last_update = last_dt
+                session.add(existing)
+                session.commit()
+                return existing
+            else:
+                ab = AccountBalance(
+                    account_id=account_id,
+                    balance=balance,
+                    coming_balance=coming_balance,
+                    last_update=last_dt,
+                )
+                session.add(ab)
+                session.commit()
+                return ab
+
+    def upsert_account_balances(self, balances):
+        """
+        Batch upsert balances.
+        balances: iterable of dicts with keys: account_id, balance, coming_balance, last_update
+        Returns list of AccountBalance instances.
+        """
+        results = []
+        for b in balances:
+            res = self.upsert_account_balance(
+                b["id"], b["balance"], b["coming_balance"], b["last_update"]
+            )
+            results.append(res)
+        return results
+
+    def last_account_balance(self):
+        """
+        Get the most recent account balance snapshot.
+        Returns AccountBalance or None
+        """
+        with self.session_scope() as session:
+            # Return the most recent AccountBalance row for each account_id.
+            # Use a grouped subquery to get max(last_update) per account, then join back.
+
+            subq = (
+                session.query(
+                    AccountBalance.account_id,
+                    func.max(AccountBalance.last_update).label("max_update"),
+                )
+                .group_by(AccountBalance.account_id)
+                .all()
+            )
+            res = {k: v for k, v in subq}
+            return res
