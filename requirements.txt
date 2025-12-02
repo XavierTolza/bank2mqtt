@@ -7,3 +7,4 @@ paho-mqtt
 sqlalchemy
 jsonschema
 pandas
+psycopg2
