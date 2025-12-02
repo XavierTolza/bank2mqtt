@@ -2,6 +2,7 @@
 Integration tests for the bank2mqtt CLI run command.
 Tests the full flow of fetching accounts and saving them to the database.
 """
+
 import pytest
 from unittest.mock import Mock, patch, MagicMock
 from bank2mqtt.db import Bank2MQTTDatabase, Account
@@ -33,9 +34,7 @@ class TestCliRun:
         mqtt.process_transaction.return_value = None
         return mqtt
 
-    def _run_command_once(
-        self, test_db: Bank2MQTTDatabase, mock_client, mock_mqtt
-    ):
+    def _run_command_once(self, test_db: Bank2MQTTDatabase, mock_client, mock_mqtt):
         """
         Helper method to run the 'run' command once.
         Patches the global client and mqtt objects to use mocks.
@@ -211,15 +210,18 @@ class TestCliRun:
 
     @pytest.mark.parametrize("db_type", ["sqlite", "postgres"])
     def test_run_with_both_db_backends(
-        self, db_type, mock_client, mock_mqtt, sample_accounts,
-        temp_sqlite_db, postgres_db
+        self,
+        db_type,
+        mock_client,
+        mock_mqtt,
+        sample_accounts,
+        temp_sqlite_db,
+        postgres_db,
     ):
         """
         Test that the run command works with both backends.
         """
-        test_db = (
-            temp_sqlite_db if db_type == "sqlite" else postgres_db
-        )
+        test_db = temp_sqlite_db if db_type == "sqlite" else postgres_db
 
         self._run_command_once(test_db, mock_client, mock_mqtt)
 

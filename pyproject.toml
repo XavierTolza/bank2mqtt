@@ -38,12 +38,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-test = [
-    "pytest>=7.0",
-    "pytest-cov>=4.0",
-    "pytest-mock>=3.10",
-    "docker>=6.0",
-]
+test = ["pytest>=7.0", "pytest-cov>=4.0", "pytest-mock>=3.10", "docker>=6.0"]
 
 [project.scripts]
 bank2mqtt = "bank2mqtt.__main__:cli"

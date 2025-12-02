@@ -1,6 +1,7 @@
 """
 Pytest configuration and fixtures for bank2mqtt tests.
 """
+
 import os
 import tempfile
 from pathlib import Path
@@ -103,7 +104,7 @@ def temp_sqlite_db() -> Generator[Bank2MQTTDatabase, None, None]:
         yield db
 
         # Cleanup
-        db.close() if hasattr(db, 'close') else None
+        db.close() if hasattr(db, "close") else None
 
 
 @pytest.fixture
@@ -120,14 +121,12 @@ def postgres_db() -> Generator[Bank2MQTTDatabase, None, None]:
     yield db
 
     # Cleanup
-    db.close() if hasattr(db, 'close') else None
+    db.close() if hasattr(db, "close") else None
     pg_container.stop()
 
 
 @pytest.fixture(params=["sqlite"])
-def test_db(
-    request, temp_sqlite_db
-) -> Generator[Bank2MQTTDatabase, None, None]:
+def test_db(request, temp_sqlite_db) -> Generator[Bank2MQTTDatabase, None, None]:
     """
     Parametrized fixture that provides SQLite database for testing.
     Can be extended with PostgreSQL when schema issues are fixed.
