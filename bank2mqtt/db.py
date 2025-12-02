@@ -466,27 +466,21 @@ class Bank2MQTTDatabase:
             existing = (
                 session.query(AccountBalance).filter_by(account_id=account_id).first()
             )
-            if existing:
-                # If last_update is identical, do nothing
-                if existing.last_update == last_dt:
-                    return existing
-                # update fields and return
-                existing.balance = balance
-                existing.coming_balance = coming_balance
-                existing.last_update = last_dt
-                session.add(existing)
-                session.commit()
+            if existing and existing.last_update == last_dt:
+                # Record already exists with same timestamp, no update needed
                 return existing
-            else:
-                ab = AccountBalance(
-                    account_id=account_id,
-                    balance=balance,
-                    coming_balance=coming_balance,
-                    last_update=last_dt,
-                )
-                session.add(ab)
-                session.commit()
-                return ab
+
+            # Create new AccountBalance record
+            ab = AccountBalance(
+                account_id=account_id,
+                balance=balance,
+                coming_balance=coming_balance,
+                last_update=last_dt,
+            )
+            session.add(ab)
+
+            session.commit()
+            return ab
 
     def upsert_account_balances(self, balances):
         """
