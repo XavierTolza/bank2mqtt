@@ -55,7 +55,6 @@ pip-wheel-metadata/
 *.tsv
 *.jsonl
 *.xml
-*.yml
 *.yaml
 *.md~
 *.rst~

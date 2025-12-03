@@ -70,7 +70,7 @@ class Authentication(Base):
 
     __tablename__ = "authentications"
     id = Column(Integer, primary_key=True)
-    domain_id = Column(String, ForeignKey("domain.id"))
+    domain_id = Column(Integer, ForeignKey("domain.id"))
     client_id = Column(String, nullable=False)
     client_secret = Column(String, nullable=False)
     auth_token = Column(String, unique=True, nullable=False)

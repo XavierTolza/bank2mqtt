@@ -1,0 +1,81 @@
+
+version: '3.8'
+
+services:
+  mosquitto:
+    image: eclipse-mosquitto
+    container_name: mosquitto
+    restart: no
+    ports:
+      - "1883:1883"    # MQTT
+      - "9001:9001"    # Websockets (optional)
+    volumes:
+      - ./docker_compose/mosquitto/config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - mosquitto_data:/mosquitto/data
+      - mosquitto_log:/mosquitto/log
+    networks:
+      - mqtt_db_net
+
+  postgres:
+    image: postgres
+    container_name: bank2mqtt_db
+    restart: no
+    environment:
+      POSTGRES_USER: bank2mqtt
+      POSTGRES_PASSWORD: bank2mqtt_pass
+      POSTGRES_DB: bank2mqtt
+    ports:
+      - "5432:5432"
+    volumes:
+      # Use /var/lib/postgresql so the image can create versioned subdirectories
+      - pgdata:/var/lib/postgresql
+    networks:
+      - mqtt_db_net
+
+  bank2mqtt:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: bank2mqtt
+    restart: no
+    depends_on:
+      - postgres
+      - mosquitto
+    env_file:
+      - .env
+    environment:
+      # Postgres connection for the app (adjust if your app uses separate vars)
+      DATABASE_URL: "postgresql://bank2mqtt:bank2mqtt_pass@bank2mqtt_db:5432/bank2mqtt"
+      # MQTT broker host (used by the app if configurable via env)
+      MQTT_HOST: mosquitto
+      MQTT_TOPIC: bank2mqtt
+
+    networks:
+      - mqtt_db_net
+
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: pgadmin
+    restart: no
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@gmail.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      - postgres
+    networks:
+      - mqtt_db_net
+  
+volumes:
+  mosquitto_data:
+  mosquitto_log:
+  pgdata:
+  pgadmin_data:
+
+networks:
+  mqtt_db_net:
+    driver: bridge
+
