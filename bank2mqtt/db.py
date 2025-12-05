@@ -21,6 +21,7 @@ from contextlib import contextmanager
 from datetime import datetime as dt
 import os
 from sqlalchemy import func
+from sqlalchemy import UniqueConstraint
 
 
 # --- Models ---
@@ -190,15 +191,21 @@ class AccountBalance(Base):
     """
     Store account balance snapshot.
     Fields:
-      - account_id: FK to accounts.id (unique, one-to-one)
+      - account_id: FK to accounts.id
       - balance: current balance
       - coming_balance: pending/coming balance
       - last_update: datetime of last update
+
+    Unique constraint: (account_id, last_update)
     """
 
     __tablename__ = "account_balances"
+    __table_args__ = (
+        UniqueConstraint("account_id", "last_update", name="uix_account_last_update"),
+    )
+
     id = Column(Integer, primary_key=True, autoincrement=True)
-    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False, unique=True)
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False)
     balance = Column(DECIMAL, nullable=False)
     coming_balance = Column(DECIMAL, nullable=False)
     last_update = Column(DateTime, nullable=False)
